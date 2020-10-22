@@ -789,33 +789,43 @@ func execContainer(c *cli.Context) (err error) {
 	opts := &pb.ExecuteContainerOptions{
 		ContainerId: c.Args().First(),
 		OpenStdin:   c.Bool("interactive"),
-		Commands:    c.Args().Tail(),
-		Envs:        c.StringSlice("env"),
-		Workdir:     c.String("workdir"),
-	}
-	resp, err := client.ExecuteContainer(context.Background())
-	if err != nil {
-		return
+		// Commands:    c.Args().Tail(),
+		Envs:    c.StringSlice("env"),
+		Workdir: c.String("workdir"),
 	}
 
-	if err = resp.Send(opts); err != nil {
-		return
+	exec := func() error {
+		resp, err := client.ExecuteContainer(context.Background())
+		if err != nil {
+			return err
+		}
+
+		if err = resp.Send(opts); err != nil {
+			return err
+		}
+
+		iStream := interactiveStream{
+			Recv: resp.Recv,
+			Send: func(cmd []byte) error {
+				return resp.Send(&pb.ExecuteContainerOptions{ReplCmd: cmd})
+			},
+		}
+
+		code, err := handleInteractiveStream(opts.OpenStdin, iStream, 1)
+		if err == nil && code != 0 {
+			return cli.Exit("", code)
+		}
+
+		return err
 	}
 
-	iStream := interactiveStream{
-		Recv: resp.Recv,
-		Send: func(cmd []byte) error {
-			return resp.Send(&pb.ExecuteContainerOptions{ReplCmd: cmd})
-		},
+	for i := 0; i < 10; i++ {
+		if err = exec(); err != nil {
+			return err
+		}
 	}
 
-	code, err := handleInteractiveStream(opts.OpenStdin, iStream, 1)
-	if err == nil {
-		return cli.Exit("", code)
-	}
-
-	return err
-
+	return
 }
 
 func getContainerLog(c *cli.Context) error {
